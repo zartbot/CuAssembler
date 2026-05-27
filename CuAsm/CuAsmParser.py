@@ -104,7 +104,8 @@ class CuAsmSymbol(object):
     SymbolTypes = {'@function'          :0,
                    '@object'            :1,
                    '@"STT_CUDA_TEXTURE"':2,
-                   '@"STT_CUDA_SURFACE"':3}
+                   '@"STT_CUDA_SURFACE"':3,
+                   '@"STT_CUDA_OBJECT"' :4}
 
     def __init__(self, name):
         self.name = name
@@ -306,7 +307,7 @@ class CuAsmSection(object):
                 barnum = int(res.groups()[0])
         
         if regnum is None:
-            raise Exception("Unknown register number for section %s!"%self.name)
+            pass
         elif  regnum > 255 or regnum<0: # TODO: use MAX_REG_COUNT instead?
             raise Exception("Invalid register number %d for section %s!"%(regnum, self.name))
         else:
@@ -490,7 +491,8 @@ class CuAsmRelocation(object):
         'R_CUDA_ABS32_HI_20'      : 44,
         'R_CUDA_ABS32_LO_32'      : 56,
         'R_CUDA_ABS32_HI_32'      : 57,
-        'R_CUDA_ABS47_34'         : 58}
+        'R_CUDA_ABS47_34'         : 58,
+        'R_CUDA_UNUSED_CLEAR64'   : 73}
 
     def __init__(self, section, offset, relsymname, relsymid, reltype, reladd=None):
         self.section    = section
@@ -664,7 +666,9 @@ class CuAsmParser(object):
             '.global'            : self.__dir_global,                # declare a global symbol
             '.weak'              : self.__dir_weak,                  # declare a weak symbol
             '.zero'              : self.__dir_zero,                  # emit zero bytes
-            '.other'             : self.__dir_other,                 # set symbol other 
+            '.other'             : self.__dir_other,                 # set symbol other
+            '.string'            : self.__dir_string,                # emit null-terminated string
+            '.tkinfo'            : self.__dir_tkinfo,                # toolkit info marker (no-op)
             # supplementary directives defined by cuasm
             # all for setting some ELF/Section/Segment header attributes
             # some may with same funtionality as predefined directives
@@ -908,14 +912,14 @@ class CuAsmParser(object):
                 section.updateResourceInfo()
                 kname = secname[6:] # strip ".text."
                 symidx = self.__getSymbolIdx(kname)
-                regnumdict[symidx] = section.extra['regnum']
+                if 'regnum' in section.extra:
+                    regnumdict[symidx] = section.extra['regnum']
 
-        sec = self.__mSectionDict['.nv.info']
-
-        # print(sec.getData().hex())
-        nvinfo = CuNVInfo(sec.getData(), self.m_Arch)
-        self.m_Arch.setRegCountInNVInfo(nvinfo, regnumdict)
-        sec.setData(nvinfo.serialize())
+        if regnumdict and '.nv.info' in self.__mSectionDict:
+            sec = self.__mSectionDict['.nv.info']
+            nvinfo = CuNVInfo(sec.getData(), self.m_Arch)
+            self.m_Arch.setRegCountInNVInfo(nvinfo, regnumdict)
+            sec.setData(nvinfo.serialize())
 
     @CuAsmLogger.logTraceIt    
     def __buildInternalTables(self):
@@ -1040,14 +1044,21 @@ class CuAsmParser(object):
                 sname = '.rela' + rel.section.name
             else:
                 sname = '.rel' + rel.section.name
-            
+                if sname not in self.__mSectionDict:
+                    sname_rela = '.rela' + rel.section.name
+                    if sname_rela in self.__mSectionDict:
+                        rel.reladd = 0
+                        sname = sname_rela
+
             # FIXME: insert REL/RELA sections if necessary
             relSecDict[sname].append(rel)
-        
+
         # CHECK: The order of rel entries probably does not matter
         #        But to reduce unmatchness w.r.t. original cubin
         #        The order is reversed as the official toolkit does.
         for sname in relSecDict:
+            if sname not in self.__mSectionDict:
+                continue
             section = self.__mSectionDict[sname]
             rellist = relSecDict[sname]
             nrel = len(rellist)
@@ -1102,7 +1113,7 @@ class CuAsmParser(object):
                     # check explicit types of relocations
                     # Example : fun@R_CUDA_G64(C1)
                     # Seems only appear in debug version?
-                    p_rel = re.compile(r'fun@(\w+)\(([^\)])\)')
+                    p_rel = re.compile(r'fun@(\w+)\(([^\)]+)\)')
                     res_rel = p_rel.match(expr)
                     if res_rel:
                         reltype = res_rel.groups()[0]
@@ -1301,10 +1312,33 @@ class CuAsmParser(object):
     def __dir_sectionflags(self, args):
         self.__assertArgc('.sectionflags', args, 1, allowMore=False)
         self.__mCurrSection.flags.append(args[0])
+        if 'SHF_NOTE_NV' in args[0]:
+            self.__emitNoteHeader()
 
     def __dir_sectionentsize(self, args):
         self.__assertArgc('.sectionentsize', args, 1, allowMore=False)
         self.__mCurrSection.entsize = int(args[0])
+
+    def __emitNoteHeader(self):
+        import struct
+        note_name = b'NVIDIA Corp\x00'
+        header_size = 12 + len(note_name)
+        sec_size = self.__mCurrSection.header.get('size', 0)
+        descsz = sec_size - header_size if sec_size > header_size else 0
+        flags_str = ' '.join(str(f) for f in self.__mCurrSection.flags)
+        ntype = 0x03e8 if 'CUINFO' in flags_str else 0x07d0
+        note_header = struct.pack('<III', len(note_name), descsz, ntype) + note_name
+        self.__emitBytes(note_header)
+
+    def __dir_tkinfo(self, args):
+        pass
+
+    def __dir_string(self, args):
+        s = ','.join(args)
+        if s.startswith('"') and s.endswith('"'):
+            s = s[1:-1]
+        raw = s.encode('utf-8') + b'\x00'
+        self.__emitBytes(raw)
 
     def __dir_sectioninfo(self, args):
         self.__assertArgc('.sectioninfo', args, 1, allowMore=False)
@@ -1374,7 +1408,7 @@ class CuAsmParser(object):
         self.__mSymbolDict[symbol].type = stype
 
     def __dir_size(self, args):
-        self.__assertArgc('.size', args, 2, allowMore=False)
+        self.__assertArgc('.size', args, 2, allowMore=True)
         symbol = args[0]
         if symbol not in self.__mSymbolDict:
             self.__mSymbolDict[symbol] = CuAsmSymbol(symbol)
@@ -1382,6 +1416,8 @@ class CuAsmParser(object):
         # NOTE: the size of a symbol is probably an expression
         #       this will be evaluted when generating symbol tables
         self.__mSymbolDict[symbol].size = args[1]
+        if len(args) >= 3:
+            self.__mSymbolDict[symbol].alignment = int(args[2])
 
     def __dir_global(self, args):
         '''.global defines a global symbol.
@@ -1452,7 +1488,12 @@ class CuAsmParser(object):
         self.__mCuAsmFile.fileHeader[attrname] = self.__cvtValue(args[0])
         if attrname == 'flags':
             flags = int(args[0], 16)
-            smversion = flags & 0xff
+            # ABI 8+ (CUDA 13.0, SM_100+): SM version at (flags>>8)&0xff
+            abi_version = self.__mCuAsmFile.fileHeader.get('ident_abiversion', 7)
+            if abi_version >= 8:
+                smversion = (flags >> 8) & 0xff
+            else:
+                smversion = flags & 0xff
             self.m_Arch = CuSMVersion(smversion)
 
             if (not hasattr(self, '__mCuInsAsmRepos') 

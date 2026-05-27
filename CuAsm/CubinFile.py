@@ -76,11 +76,16 @@ class CubinFile():
                 CuAsmLogger.logWarning(msg)
                 # raise Exception(msg)
 
-            # Example: type=2, abi=7, sm=86, toolkit=111, flags = 0x500556
-            # flags>>16 = 0x50 = 80, means virtual arch compute_80
-            # flags&0xff = 0x56 = 86, means sm_86
-            vsm_version = (self.__mELFFileHeader['e_flags']>>16)&0xff
-            sm_version = self.__mELFFileHeader['e_flags']&0xff
+            # ELF flags format depends on ABI version:
+            # ABI <= 7: flags&0xff = SM version, (flags>>16)&0xff = virtual arch
+            # ABI 8+:   (flags>>8)&0xff = SM version (for SM_100+)
+            abi_version = self.__mELFFileHeader['e_ident']['EI_ABIVERSION']
+            if abi_version >= 8:
+                sm_version = (self.__mELFFileHeader['e_flags'] >> 8) & 0xff
+                vsm_version = sm_version
+            else:
+                vsm_version = (self.__mELFFileHeader['e_flags']>>16)&0xff
+                sm_version = self.__mELFFileHeader['e_flags']&0xff
             self.m_Arch = CuSMVersion(sm_version)
             self.m_VirtualSMVersion = vsm_version
             self.m_ToolKitVersion = self.__mELFFileHeader['e_version']
@@ -223,13 +228,21 @@ class CubinFile():
         stream.write(ident + '.__elf_ident_abiversion %d\n'%fheader['e_ident']['EI_ABIVERSION'])
         stream.write(ident + '.__elf_type             %s\n'%fheader['e_type'])
         stream.write(ident + '.__elf_machine          %s\n'%fheader['e_machine'])
-        stream.write(ident + '.__elf_version          %d \t\t// CUDA toolkit version \n'%fheader['e_version'])
+        e_version = fheader['e_version']
+        if isinstance(e_version, str):
+            e_version = 1
+        stream.write(ident + '.__elf_version          %d \t\t// CUDA toolkit version \n'%e_version)
         stream.write(ident + '.__elf_entry            %d \t\t// entry point address \n'%fheader['e_entry'])
         stream.write(ident + '.__elf_phoff            0x%x \t\t// program header offset, maybe updated by assembler\n'%fheader['e_phoff'])
         stream.write(ident + '.__elf_shoff            0x%x \t\t// section header offset, maybe updated by assembler\n'%fheader['e_shoff'])
 
-        vsmversion = (fheader['e_flags']>>16)&0xff
-        smversion = fheader['e_flags']&0xff
+        abi_version = fheader['e_ident']['EI_ABIVERSION']
+        if abi_version >= 8:
+            smversion = (fheader['e_flags'] >> 8) & 0xff
+            vsmversion = smversion
+        else:
+            vsmversion = (fheader['e_flags']>>16)&0xff
+            smversion = fheader['e_flags']&0xff
         stream.write(ident + '.__elf_flags            0x%x \t\t// Flags, SM_%d(0x%x), COMPUTE_%d(0x%x) \n'%(fheader['e_flags'], smversion, smversion, vsmversion, vsmversion))
         stream.write(ident + '.__elf_ehsize           %d \t\t// elf header size \n'%fheader['e_ehsize'])
         stream.write(ident + '.__elf_phentsize        %d \t\t// program entry size\n'%fheader['e_phentsize'])
@@ -442,7 +455,11 @@ class CubinFile():
                 irel += 1
 
         else:
-            raise Exception('Unknown implicit section %s !'%secname)
+            stream.write('\t.section  "%s", %s, %s\n'%(secname, header['sh_flags'], header['sh_type']))
+            stream.write('\t// unknown implicit section, kept as raw bytes\n')
+            self.__writeSectionHeaderAsm(stream, secname, header)
+            if data:
+                stream.write(bytes2Asm(data))
 
     def __writeSegmentHeaderAsm(self, stream, segheader, segrange):
         '''

@@ -81,6 +81,8 @@ c_ModiDTypes = set(['S4', 'S8', 'S16', 'S32', 'S64', 'U4', 'U8', 'U16', 'U32', '
 c_ModiDTypesExt = c_ModiDTypes.union(set(['S24', 'U24', 'S16H0', 'S16H1', 'U16H0', 'U16H1'])) # IMAD/IMADSP/IMUL(32I)* of sm_6x
 c_ModiRGBA = set(['R', 'G', 'B', 'A']) # For TLD4
 c_ModiLOP = set(['AND', 'OR', 'XOR', 'NOT']) # PSET/PSETP for sm_6x
+c_ModiMMATypes = set(['E4M3', 'E5M2', 'E2M3', 'E3M2', 'E2M1', 'F16', 'F32', 'F64',
+                      'S4', 'S8', 'U4', 'U8', 'BF16', 'TF32'])
 
 # NOTE: position dependent opcode list is arch dependent, 
 c_PosDepModis = {
@@ -114,6 +116,9 @@ c_PosDepModis = {
                 'IMMA'     : c_ModiDTypes,
 
                 'TLD4'     : c_ModiRGBA,
+
+                'QMMA'     : c_ModiMMATypes,
+                'OMMA'     : c_ModiMMATypes,
                 }
 # I2F/F2I/F2F has different OpCode for 32/64,
 # but 32bit modifier may not be displayed

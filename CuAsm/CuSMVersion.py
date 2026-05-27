@@ -25,23 +25,25 @@ class CuSMVersion(object):
 
     __InstanceRepos = {}
 
-    SMVersionDict = makeVersionDict([35, 37, 
-                                     50, 52, 53, 
-                                     60, 61, 62, 
-                                     70, 72, 75, 
-                                     80, 86, 87, 89, 
-                                     90])
+    SMVersionDict = makeVersionDict([35, 37,
+                                     50, 52, 53,
+                                     60, 61, 62,
+                                     70, 72, 75,
+                                     80, 86, 87, 89,
+                                     90,
+                                     100, 120])
 
     # Some versions do not have pre-gathered InsAsmRepos, but since the encoding may be almost identical
-    # we may just copy the InsAsmRepos from another version     
-    InsAsmReposAliasDict = {62:61, 72:75, 87:86}
+    # we may just copy the InsAsmRepos from another version
+    InsAsmReposAliasDict = {62:61, 72:75, 87:86, 90:86, 100:86, 120:86}
 
     SMCodeNameDict = { 35:'Kepler',  37:'Kepler',
                        50:'Maxwell', 52:'Maxwell', 53:'Maxwell',
                        60:'Pascal',  61:'Pascal',  62:'Pascal',
                        70:'Volta',   72:'Turing',  75:'Turing',
                        80:'Ampere',  86:'Ampere',  87:'Ampere',
-                       89:'Adalovelace', 90:'Hopper'}
+                       89:'Adalovelace', 90:'Hopper',
+                       100:'Blackwell', 120:'Blackwell'}
 
     PadBytes_5x_6x  = bytes.fromhex('e00700fc00801f00 000f07000000b050 000f07000000b050 000f07000000b050')
     Pad_CCode_5x_6x = 0x7e0               # [----:B------:R-:W-:Y:S00]
@@ -117,11 +119,11 @@ class CuSMVersion(object):
     POSDEP_Opcodes_SM5x6x = POSDEP_Opcodes_Common.union(set(['XMAD', 'IMAD', 'IMAD32I', 'IMADSP', 
                                                              'IMUL', 'IMUL32I', 'PSET', 'PSETP']))
     POSDEP_Opcodes_SM7x = POSDEP_Opcodes_Common.union(set(['HMMA', 'IMMA']))
-    POSDEP_Opcodes_SM8x = POSDEP_Opcodes_Common.union(set(['HMMA', 'IMMA', 'I2IP', 'F2FP']))
+    POSDEP_Opcodes_SM8x = POSDEP_Opcodes_Common.union(set(['HMMA', 'IMMA', 'I2IP', 'F2FP', 'QMMA', 'OMMA']))
     
     def __init__(self, version):
         self.__mVersion = CuSMVersion.parseVersionNumber(version)
-    
+
         self.__mMajor = self.__mVersion // 10
         self.__mMinor = self.__mVersion % 10
         if self.__mMajor<=6:
@@ -138,7 +140,7 @@ class CuSMVersion(object):
 
             if self.__mMajor == 7:
                 self.m_PosDepOpcodes = self.POSDEP_Opcodes_SM7x
-            elif self.__mMajor == 8:
+            elif self.__mMajor >= 8:
                 self.m_PosDepOpcodes = self.POSDEP_Opcodes_SM8x
             else:
                 self.m_PosDepOpcodes = self.POSDEP_Opcodes_Common
@@ -583,14 +585,16 @@ class CuSMVersion(object):
     def parseVersionNumber(version):
         if isinstance(version, str):
             version = version.upper()
-        
+            # Strip trailing 'A' suffix for sub-architecture variants (e.g. SM_120A -> SM_120)
+            version = re.sub(r'A$', '', version)
+
         if isinstance(version, CuSMVersion):
             version = version.__mVersion
         elif version in CuSMVersion.SMVersionDict:
             version = CuSMVersion.SMVersionDict[version]
         else:
             raise ValueError('Invalid SM version %s!!!' % version)
-    
+
         return version
 
     @staticmethod

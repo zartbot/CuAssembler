@@ -431,15 +431,19 @@ def hackCubinDesc(fin, fout, always_output=True):
     with open(fin, 'rb') as fin_s:
         fin_s.seek(0)
         bs = fin_s.read()
-        
+
         bio = BytesIO(bs)
         ef = ELFFile(fin_s)
-        smv = ef.header['e_flags'] & 0xff
+        abi_ver = ef.header['e_ident']['EI_ABIVERSION']
+        if abi_ver >= 8:
+            smv = (ef.header['e_flags'] >> 8) & 0xff
+        else:
+            smv = ef.header['e_flags'] & 0xff
         if smv // 10 < 8: # SM major version < 8 means pre-Ampere
             if always_output:
                 shutil.copy(fin, fout)
             return False
-        
+
         slist = []
         for i, s in enumerate(ef.iter_sections()):
             if s.name.startswith('.text.'):
@@ -477,10 +481,14 @@ def fixCubinDesc(fin, fout):
     with open(fin, 'rb') as fin_s:
         fin_s.seek(0)
         fbytes = fin_s.read()  # bs is read-only, will be reused later
-        
+
         bio = BytesIO(fbytes)
         ef = ELFFile(fin_s)
-        smv = (ef.header['e_flags'] & 0xff) // 10
+        abi_ver = ef.header['e_ident']['EI_ABIVERSION']
+        if abi_ver >= 8:
+            smv = ((ef.header['e_flags'] >> 8) & 0xff) // 10
+        else:
+            smv = (ef.header['e_flags'] & 0xff) // 10
         if smv < 8: # SM major version < 8 means pre-Ampere, no need to hack/fix
             CuAsmLogger.logProcedure(f'Cubin ({fin}) with SM major version {smv} does not need desc hack! Skipping...')
             return False

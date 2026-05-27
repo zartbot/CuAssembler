@@ -50,7 +50,8 @@ class SassLineType(Enum):
 
     # .headerflags    @"EF_CUDA_SM86 EF_CUDA_PTX_SM(EF_CUDA_SM86)"
     # .headerflags	@"EF_CUDA_TEXMODE_UNIFIED EF_CUDA_64BIT_ADDRESS EF_CUDA_SM75 EF_CUDA_VIRTUAL_SM(EF_CUDA_SM75)"
-    HeaderFlag = 5, re.compile(r'^\s*\.headerflags.*EF_CUDA_SM(?P<arch>\d+)')
+    # .target	sm_120  (CUDA 13.0+ format)
+    HeaderFlag = 5, re.compile(r'^\s*(?:\.headerflags.*EF_CUDA_SM|\.target\s+sm_)(?P<arch>\d+)')
 
     # all other lines	
     Others     = 6, re.compile('.*')
@@ -636,7 +637,7 @@ class CuInsFeeder():
         elif smversion.getMajor() in {5,6}:
             self.__CurrTM = self.__TMs['5x6x']
             self.__SplitCodeList = self.__SplitCodeList_5x6x
-        elif smversion.getMajor() in {7,8}:
+        elif smversion.getMajor() >= 7:
             self.__CurrTM = self.__TMs['7x8x']
             self.__SplitCodeList = self.__SplitCodeList_7x8x
         else:

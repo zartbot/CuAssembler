@@ -51,6 +51,11 @@ p_URConstMemType = re.compile(r'cx\[(?P<URBank>UR\w+)\]\[(?P<Addr>[+-?\w\.]+)\]'
 # Pattern for memory address with a cache-policy description, such as:
 p_DescAddressType = re.compile(r'desc\[(?P<URIndex>UR\d+)\](?P<Addr>\[.*\])$')
 
+# Patterns for SM_110 tcgen05/TMEM operand forms: tmem[URx], gdesc[URx], idesc[URx]
+p_TmemType = re.compile(r'tmem\[(?P<URIndex>UR\d+)\]$')
+p_GdescType = re.compile(r'gdesc\[(?P<URIndex>UR\d+)\]$')
+p_IdescType = re.compile(r'idesc\[(?P<URIndex>UR\d+)\]$')
+
 # Pattern for matching white spaces
 p_WhiteSpace = re.compile(r'\s+')
 
@@ -75,7 +80,8 @@ c_AddrFuncs = set(['BRA', 'BRX', 'BRXU', 'CALL', 'JMP',
 # Functions that have position dependent modifiers, such as F2F.F16.F32 != F2F.F32.F16
 c_PosDepFuncs = set(['I2I', 'F2F', 'IDP', 'HMMA', 'IMMA', 'XMAD', 'IMAD', 'IMADSP',
                      'VADD', 'VMAD', 'VSHL', 'VSHR', 'VSET', 'VSETP', 'VMNMX',
-                     'VABSDIFF', 'VABSDIFF4', 'TLD4', 'PSET', 'PSETP'])
+                     'VABSDIFF', 'VABSDIFF4', 'TLD4', 'PSET', 'PSETP',
+                     'UTCHMMA', 'UTCQMMA', 'UTCOMMA', 'UTCIMMA'])
 
 c_ModiDTypes = set(['S4', 'S8', 'S16', 'S32', 'S64', 'U4', 'U8', 'U16', 'U32', 'U64', 'F16', 'F32', 'F64'])
 c_ModiDTypesExt = c_ModiDTypes.union(set(['S24', 'U24', 'S16H0', 'S16H1', 'U16H0', 'U16H1'])) # IMAD/IMADSP/IMUL(32I)* of sm_6x
@@ -119,6 +125,11 @@ c_PosDepModis = {
 
                 'QMMA'     : c_ModiMMATypes,
                 'OMMA'     : c_ModiMMATypes,
+
+                'UTCHMMA'  : c_ModiMMATypes,
+                'UTCQMMA'  : c_ModiMMATypes,
+                'UTCOMMA'  : c_ModiMMATypes,
+                'UTCIMMA'  : c_ModiMMATypes,
                 }
 # I2F/F2I/F2F has different OpCode for 32/64,
 # but 32bit modifier may not be displayed
@@ -281,9 +292,14 @@ class CuInsParser():
         '''
         # strip all comments
         s = stripComments(s)
-        
+
         for cm in p_ConstTrDict:
             s = re.sub(cm, p_ConstTrDict[cm], s)
+
+        # SM_110/SM_120 (Blackwell): URZ is encoded as 0xFF (UR255) in the 8-bit
+        # uniform register field, not 0x3F (UR63) as on earlier architectures.
+        if self.m_Arch.getMajor() == 11 or self.m_Arch.getMajor() == 12:
+            s = s.replace('UR63', 'UR255')
 
         res = p_SBSet.search(s)
         if res is not None:
@@ -348,6 +364,15 @@ class CuInsParser():
             opval, opmodi = self.__parseFloatImme(op)
             opmodi.extend(modi)
             optag = [optype]
+        elif op.startswith('tmem'):
+            optype, opval, opmodi, optag = self.__parseTmemOperand(op)
+            opmodi.extend(modi)
+        elif op.startswith('gdesc'):
+            optype, opval, opmodi, optag = self.__parseGdescOperand(op)
+            opmodi.extend(modi)
+        elif op.startswith('idesc'):
+            optype, opval, opmodi, optag = self.__parseIdescOperand(op)
+            opmodi.extend(modi)
         elif op.startswith('desc'):
             optype, opval, opmodi, optag = self.__parseDescAddress(op)
             opmodi.extend(modi)
@@ -511,6 +536,33 @@ class CuInsParser():
         
         return optype, opval, amodi, optag
 
+    def __parseTmemOperand(self, s):
+        r = p_TmemType.match(s)
+        if r is None:
+            raise ValueError('Invalid tmem operand: %s' % s)
+
+        _, opval, _ = self.__parseIndexedToken(r.group('URIndex'))
+        optag = ['UR.Tmem']
+        return 'TM', opval, [], optag
+
+    def __parseGdescOperand(self, s):
+        r = p_GdescType.match(s)
+        if r is None:
+            raise ValueError('Invalid gdesc operand: %s' % s)
+
+        _, opval, _ = self.__parseIndexedToken(r.group('URIndex'))
+        optag = ['UR.Gdesc']
+        return 'GD', opval, [], optag
+
+    def __parseIdescOperand(self, s):
+        r = p_IdescType.match(s)
+        if r is None:
+            raise ValueError('Invalid idesc operand: %s' % s)
+
+        _, opval, _ = self.__parseIndexedToken(r.group('URIndex'))
+        optag = ['UR.Idesc']
+        return 'ID', opval, [], optag
+
     def __transScoreboardSet(self, s):
         ''' Translate scoreboard set such as {3,4} to int values.
 
@@ -611,6 +663,19 @@ class CuInsParser():
                     addr = self.m_InsVals[-1] - self.m_InsAddr - self.m_Arch.getInstructionLength()
                     if addr<0:
                         self.m_InsModifier.append('0_NegAddrOffset')
+
+                    # SM_110 (Thor): BRA/CALL/RET encode offset>>4 in split bit fields
+                    # code[23:18] = off4[5:0], code[39:34] = off4[11:6] (10-bit gap).
+                    # Pre-transform to match physical layout for the matrix solver.
+                    if self.m_Arch.getMajor() == 11 and self.m_InsOp in {'BRA', 'CALL', 'RET'}:
+                        addr_shr4 = addr >> 4
+                        addr = (addr_shr4 & 0x3f) | ((addr_shr4 >> 6) << 16)
+
+                    # SM_120 (RTX Blackwell): same split-offset encoding as SM_110
+                    # for BRA/CALL/RET (independently verified on RTX PRO 5000).
+                    elif self.m_Arch.getMajor() == 12 and self.m_InsOp in {'BRA', 'CALL', 'RET'}:
+                        addr_shr4 = addr >> 4
+                        addr = (addr_shr4 & 0x3f) | ((addr_shr4 >> 6) << 16)
 
                     # The value length of same key should be kept the same
                     self.m_InsVals[-1] = addr

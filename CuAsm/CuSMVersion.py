@@ -31,11 +31,12 @@ class CuSMVersion(object):
                                      70, 72, 75,
                                      80, 86, 87, 89,
                                      90,
-                                     100, 120])
+                                     100, 110, 120])
 
-    # Some versions do not have pre-gathered InsAsmRepos, but since the encoding may be almost identical
-    # we may just copy the InsAsmRepos from another version
-    InsAsmReposAliasDict = {62:61, 72:75, 87:86, 90:86, 100:86, 120:86}
+    # Alias dict: versions without their own InsAsmRepos file can borrow from
+    # another version with similar encoding. Only valid within the SAME arch family.
+    # SM_110 and SM_120 have dedicated files — they are NOT in this dict.
+    InsAsmReposAliasDict = {62:61, 72:75, 87:86, 90:86, 100:120}
 
     SMCodeNameDict = { 35:'Kepler',  37:'Kepler',
                        50:'Maxwell', 52:'Maxwell', 53:'Maxwell',
@@ -43,7 +44,7 @@ class CuSMVersion(object):
                        70:'Volta',   72:'Turing',  75:'Turing',
                        80:'Ampere',  86:'Ampere',  87:'Ampere',
                        89:'Adalovelace', 90:'Hopper',
-                       100:'Blackwell', 120:'Blackwell'}
+                       100:'Blackwell', 110:'Thor', 120:'Blackwell'}
 
     PadBytes_5x_6x  = bytes.fromhex('e00700fc00801f00 000f07000000b050 000f07000000b050 000f07000000b050')
     Pad_CCode_5x_6x = 0x7e0               # [----:B------:R-:W-:Y:S00]
@@ -119,7 +120,16 @@ class CuSMVersion(object):
     POSDEP_Opcodes_SM5x6x = POSDEP_Opcodes_Common.union(set(['XMAD', 'IMAD', 'IMAD32I', 'IMADSP', 
                                                              'IMUL', 'IMUL32I', 'PSET', 'PSETP']))
     POSDEP_Opcodes_SM7x = POSDEP_Opcodes_Common.union(set(['HMMA', 'IMMA']))
-    POSDEP_Opcodes_SM8x = POSDEP_Opcodes_Common.union(set(['HMMA', 'IMMA', 'I2IP', 'F2FP', 'QMMA', 'OMMA']))
+    # SM_80/86/87: Ampere baseline
+    POSDEP_Opcodes_SM8x = POSDEP_Opcodes_Common.union(set(['HMMA', 'IMMA', 'I2IP', 'F2FP']))
+    # SM_89 (Ada Lovelace): adds QMMA (FP8 warp MMA)
+    POSDEP_Opcodes_SM89 = POSDEP_Opcodes_SM8x.union(set(['QMMA']))
+
+    # SM_110 (Thor): inherits QMMA from sm_89 + adds tcgen05 MMA opcodes
+    POSDEP_Opcodes_SM110 = POSDEP_Opcodes_SM89.union(set(['UTCHMMA', 'UTCQMMA', 'UTCOMMA', 'UTCIMMA']))
+
+    # SM_120 (RTX Blackwell): inherits QMMA from sm_89 + adds OMMA (warp FP4/FP6 block-scale)
+    POSDEP_Opcodes_SM120 = POSDEP_Opcodes_SM89.union(set(['OMMA']))
     
     def __init__(self, version):
         self.__mVersion = CuSMVersion.parseVersionNumber(version)
@@ -140,7 +150,13 @@ class CuSMVersion(object):
 
             if self.__mMajor == 7:
                 self.m_PosDepOpcodes = self.POSDEP_Opcodes_SM7x
-            elif self.__mMajor >= 8:
+            elif self.__mMajor == 8 and self.__mMinor == 9:  # SM_89 (Ada)
+                self.m_PosDepOpcodes = self.POSDEP_Opcodes_SM89
+            elif self.__mMajor == 11:  # SM_110 (Thor)
+                self.m_PosDepOpcodes = self.POSDEP_Opcodes_SM110
+            elif self.__mMajor == 12:  # SM_120 (RTX Blackwell)
+                self.m_PosDepOpcodes = self.POSDEP_Opcodes_SM120
+            elif self.__mMajor >= 8:   # SM_80/86/87/90/100
                 self.m_PosDepOpcodes = self.POSDEP_Opcodes_SM8x
             else:
                 self.m_PosDepOpcodes = self.POSDEP_Opcodes_Common
@@ -585,8 +601,10 @@ class CuSMVersion(object):
     def parseVersionNumber(version):
         if isinstance(version, str):
             version = version.upper()
-            # Strip trailing 'A' suffix for sub-architecture variants (e.g. SM_120A -> SM_120)
-            version = re.sub(r'A$', '', version)
+            # Strip trailing 'A'/'F' suffix for sub-architecture variants
+            # (e.g. SM_120A -> SM_120, SM_110F -> SM_110). The a/f tiers are a
+            # compile-time gating distinction; the SASS encoding is identical.
+            version = re.sub(r'[AF]$', '', version)
 
         if isinstance(version, CuSMVersion):
             version = version.__mVersion

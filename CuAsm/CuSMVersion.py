@@ -31,12 +31,12 @@ class CuSMVersion(object):
                                      70, 72, 75,
                                      80, 86, 87, 89,
                                      90,
-                                     100, 110, 120])
+                                     100, 103, 110, 120, 121])
 
     # Alias dict: versions without their own InsAsmRepos file can borrow from
     # another version with similar encoding. Only valid within the SAME arch family.
     # SM_110 and SM_120 have dedicated files — they are NOT in this dict.
-    InsAsmReposAliasDict = {62:61, 72:75, 87:86, 90:86, 100:120}
+    InsAsmReposAliasDict = {62:61, 72:75, 87:86, 90:86, 103:100, 121:120}
 
     SMCodeNameDict = { 35:'Kepler',  37:'Kepler',
                        50:'Maxwell', 52:'Maxwell', 53:'Maxwell',
@@ -44,7 +44,8 @@ class CuSMVersion(object):
                        70:'Volta',   72:'Turing',  75:'Turing',
                        80:'Ampere',  86:'Ampere',  87:'Ampere',
                        89:'Adalovelace', 90:'Hopper',
-                       100:'Blackwell', 110:'Thor', 120:'Blackwell'}
+                       100:'Blackwell', 103:'Blackwell',
+                       110:'Thor', 120:'Blackwell', 121:'Blackwell'}
 
     PadBytes_5x_6x  = bytes.fromhex('e00700fc00801f00 000f07000000b050 000f07000000b050 000f07000000b050')
     Pad_CCode_5x_6x = 0x7e0               # [----:B------:R-:W-:Y:S00]
@@ -125,6 +126,9 @@ class CuSMVersion(object):
     # SM_89 (Ada Lovelace): adds QMMA (FP8 warp MMA)
     POSDEP_Opcodes_SM89 = POSDEP_Opcodes_SM8x.union(set(['QMMA']))
 
+    # SM_100 (Blackwell datacenter): inherits QMMA from sm_89 + adds tcgen05 MMA opcodes
+    POSDEP_Opcodes_SM100 = POSDEP_Opcodes_SM89.union(set(['UTCHMMA', 'UTCQMMA', 'UTCOMMA', 'UTCIMMA']))
+
     # SM_110 (Thor): inherits QMMA from sm_89 + adds tcgen05 MMA opcodes
     POSDEP_Opcodes_SM110 = POSDEP_Opcodes_SM89.union(set(['UTCHMMA', 'UTCQMMA', 'UTCOMMA', 'UTCIMMA']))
 
@@ -156,7 +160,9 @@ class CuSMVersion(object):
                 self.m_PosDepOpcodes = self.POSDEP_Opcodes_SM110
             elif self.__mMajor == 12:  # SM_120 (RTX Blackwell)
                 self.m_PosDepOpcodes = self.POSDEP_Opcodes_SM120
-            elif self.__mMajor >= 8:   # SM_80/86/87/90/100
+            elif self.__mMajor == 10:  # SM_100 (Blackwell datacenter)
+                self.m_PosDepOpcodes = self.POSDEP_Opcodes_SM100
+            elif self.__mMajor >= 8:   # SM_80/86/87/90
                 self.m_PosDepOpcodes = self.POSDEP_Opcodes_SM8x
             else:
                 self.m_PosDepOpcodes = self.POSDEP_Opcodes_Common
